@@ -2,12 +2,32 @@
 
 /**
 
-   #Shiba's Wife
+   #Fixes
 
-   8% auto add to the liquidity pool
+   3% auto add to the liquidity pool
    2% to token growth wallet
    10% to cause wallet
 
+   // Preliminary audit changes:
+   SCP-01 - Will be addressed through contract renouncement
+   SCP-02 - Addressed
+   SCP-03 - Will be addressed through contract renouncement
+   SCP-04 - Addressed
+   SCP-05 - Addressed (removed)
+   SCP-06 - Addressed
+   SCP-07 - Addressed
+   SCP-08 - Addressed (transfer leftover BNB to cause wallet)
+   SCP-09 - Not addressed (informational impact)
+   SCP-10 - Will be addressed through contract renouncement
+   SCP-11 - Not addressed (informational)
+
+   Additional changes:
+    1. taxFee related removed as not needed
+    2. _tFeeTotal removed as not used
+    3. removeAllFee() modified to reflect taxFee removal and to check for 3 fees
+    
+   Changes after deployment:
+    1. uniswapPair to be excluded from reward after deployment
  */
 
    pragma solidity ^0.8.3;
@@ -773,7 +793,7 @@
        ) external;
    }
    
-   contract ShibasWife is Context, IERC20, Ownable {
+   contract Fixes is Context, IERC20, Ownable {
        using SafeMath for uint256;
        using Address for address;
    
@@ -782,29 +802,27 @@
        mapping (address => mapping (address => uint256)) private _allowances;
    
        mapping (address => bool) private _isExcludedFromFee;
+       mapping (address => bool) private _isExcludedFromMaxTaxLimit;
    
        mapping (address => bool) private _isExcluded;
        address[] private _excluded;
    
        address private _causeWalletAddress = 0xfF63a768C79e1BA1Eb9B61165846bbCf5A927b38;
        address private _growthWalletAddress = 0x480c3183b32442E25782f944716b49c7C59aDc0c;
+       uint256 public leftOverBalanceAfterSwap;
       
        uint256 private constant MAX = ~uint256(0);
-       uint256 private _tTotal = 394796000000 * 10**9;
+       uint256 private constant _tTotal = 394796000000 * 10**9;
        uint256 private _rTotal = (MAX - (MAX % _tTotal));
-       uint256 private _tFeeTotal;
    
-       string private _name = "Shiba's Wife";
-       string private _symbol = "SHIBASWIFE";
-       uint8 private _decimals = 9;
-       
-       uint256 public _taxFee = 0;
-       uint256 private _previousTaxFee = _taxFee;
+       string private _name = "Fixes";
+       string private _symbol = "Fixes";
+       uint8 private constant _decimals = 18;
    
        uint256 public _growthFee = 2;
        uint256 private _previousGrowthFee = _growthFee;
    
-       uint256 public _liquidityFee = 8;
+       uint256 public _liquidityFee = 3;
        uint256 private _previousLiquidityFee = _liquidityFee;
    
        uint256 public _causeFee = 10;
@@ -817,14 +835,14 @@
        bool public swapAndLiquifyEnabled = true;
        
        uint256 public _maxTxAmount = 1973980000 * 10**9;
-       uint256 private numTokensSellToAddToLiquidity = 197398000 * 10**9;
+       uint256 private constant numTokensSellToAddToLiquidity = 197398000 * 10**9;
        
        event MinTokensBeforeSwapUpdated(uint256 minTokensBeforeSwap);
        event SwapAndLiquifyEnabledUpdated(bool enabled);
        event SwapAndLiquify(
            uint256 tokensSwapped,
            uint256 ethReceived,
-           uint256 tokensIntoLiqudity
+           uint256 tokensIntoLiquidity
        );
        
        modifier lockTheSwap {
@@ -836,7 +854,7 @@
        constructor () {
            _rOwned[owner()] = _rTotal;
            
-           IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+           IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3);
             // Create a uniswap pair for this new token
            uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory())
                .createPair(address(this), _uniswapV2Router.WETH());
@@ -871,6 +889,17 @@
            if (_isExcluded[account]) return _tOwned[account];
            return tokenFromReflection(_rOwned[account]);
        }
+
+    function withdrawLockedBNB(address payable recipient) external{
+        require(recipient != address(0), "Cannot withdraw the leftover BNB balance to the zero address");
+        require(recipient == _causeWalletAddress, "Cannot withdraw the leftover BNB balance to other than buy back wallet");
+        require(leftOverBalanceAfterSwap > 0, "The BNB balance must be greater than 0");
+        
+        // prevent re-entrancy attacks
+        uint256 amount = leftOverBalanceAfterSwap;
+        leftOverBalanceAfterSwap = 0;
+        recipient.transfer(amount);
+    }
    
        function transfer(address recipient, uint256 amount) public override returns (bool) {
            _transfer(_msgSender(), recipient, amount);
@@ -906,19 +935,6 @@
            return _isExcluded[account];
        }
    
-       function totalFees() public view returns (uint256) {
-           return _tFeeTotal;
-       }
-   
-       function deliver(uint256 tAmount) public {
-           address sender = _msgSender();
-           require(!_isExcluded[sender], "Excluded addresses cannot call this function");
-           (uint256 rAmount,,,,,) = _getValues(tAmount);
-           _rOwned[sender] = _rOwned[sender].sub(rAmount);
-           _rTotal = _rTotal.sub(rAmount);
-           _tFeeTotal = _tFeeTotal.add(tAmount);
-       }
-   
        function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
            require(tAmount <= _tTotal, "Amount must be less than supply");
            if (!deductTransferFee) {
@@ -936,7 +952,7 @@
            return rAmount.div(currentRate);
        }
    
-       function excludeFromReward(address account) public onlyOwner() {
+       function excludeFromReward(address account) external onlyOwner() {
            // require(account != 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D, 'We can not exclude Uniswap router.');
            require(!_isExcluded[account], "Account is already excluded");
            if(_rOwned[account] > 0) {
@@ -970,16 +986,12 @@
            emit Transfer(sender, recipient, tTransferAmount);
        }
        
-           function excludeFromFee(address account) public onlyOwner {
+       function excludeFromFee(address account) external onlyOwner {
            _isExcludedFromFee[account] = true;
        }
        
-       function includeInFee(address account) public onlyOwner {
+       function includeInFee(address account) external onlyOwner {
            _isExcludedFromFee[account] = false;
-       }
-       
-       function setTaxFeePercent(uint256 taxFee) external onlyOwner() {
-           _taxFee = taxFee;
        }
    
        function setCauseFeePercent(uint256 causeFee) external onlyOwner() {
@@ -1000,12 +1012,12 @@
            );
        }
    
-       function setSwapAndLiquifyEnabled(bool _enabled) public onlyOwner {
+       function setSwapAndLiquifyEnabled(bool _enabled) external onlyOwner {
            swapAndLiquifyEnabled = _enabled;
            emit SwapAndLiquifyEnabledUpdated(_enabled);
        }
        
-        //to recieve ETH from uniswapV2Router when swaping
+        //to receive BNB from uniswapV2Router when swapping
        receive() external payable {}
 
        function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
@@ -1071,12 +1083,6 @@
         if(_isExcluded[_growthWalletAddress])
             _tOwned[_growthWalletAddress] = _tOwned[_growthWalletAddress].add(tGrowth);
         }
-       
-       function calculateTaxFee(uint256 _amount) private view returns (uint256) {
-           return _amount.mul(_taxFee).div(
-               10**2
-           );
-       }
    
        function calculateCauseFee(uint256 _amount) private view returns (uint256) {
            return _amount.mul(_causeFee).div(
@@ -1097,21 +1103,18 @@
        }
        
        function removeAllFee() private {
-           if(_taxFee == 0 && _liquidityFee == 0) return;
+           if(_causeFee == 0 && _growthFee == 0 && _liquidityFee == 0) return;
            
-           _previousTaxFee = _taxFee;
            _previousCauseFee = _causeFee;
            _previousGrowthFee = _growthFee;
            _previousLiquidityFee = _liquidityFee;
            
-           _taxFee = 0;
            _causeFee = 0;
            _growthFee = 0;
            _liquidityFee = 0;
        }
        
        function restoreAllFee() private {
-           _taxFee = _previousTaxFee;
            _causeFee = _previousCauseFee;
            _growthFee = _previousGrowthFee;
            _liquidityFee = _previousLiquidityFee;
@@ -1137,8 +1140,13 @@
            require(from != address(0), "ERC20: transfer from the zero address");
            require(to != address(0), "ERC20: transfer to the zero address");
            require(amount > 0, "Transfer amount must be greater than zero");
-           if(from != owner() && to != owner())
-               require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
+
+         if(to != _causeWalletAddress){
+             if(from != owner() && to != owner()){
+             require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
+         }
+         }
+        
    
            // is the token balance of this contract address over the min number of
            // tokens that we need to initiate a swap + liquidity lock?
@@ -1194,6 +1202,8 @@
    
            // add liquidity to uniswap
            addLiquidity(otherHalf, newBalance);
+
+           leftOverBalanceAfterSwap = address(this).balance;
            
            emit SwapAndLiquify(half, newBalance, otherHalf);
        }
