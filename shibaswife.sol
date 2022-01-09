@@ -2,7 +2,7 @@
 
 /**
 
-   #Fixes
+   # Shiba's Wife
 
    3% auto add to the liquidity pool
    2% to token growth wallet
@@ -25,6 +25,7 @@
     1. taxFee related removed as not needed
     2. _tFeeTotal removed as not used
     3. removeAllFee() modified to reflect taxFee removal and to check for 3 fees
+    4. excluded array of addresses from Max TX Amount to allow Launchpad finalization and withdraw to cause wallet
     
    Changes after deployment:
     1. uniswapPair to be excluded from reward after deployment
@@ -793,7 +794,7 @@
        ) external;
    }
    
-   contract Fixes is Context, IERC20, Ownable {
+   contract ShibasWife is Context, IERC20, Ownable {
        using SafeMath for uint256;
        using Address for address;
    
@@ -802,10 +803,10 @@
        mapping (address => mapping (address => uint256)) private _allowances;
    
        mapping (address => bool) private _isExcludedFromFee;
-       mapping (address => bool) private _isExcludedFromMaxTaxLimit;
-   
        mapping (address => bool) private _isExcluded;
        address[] private _excluded;
+
+       mapping (address => bool) private _isExcludedFromMaxTxLimit;
    
        address private _causeWalletAddress = 0xfF63a768C79e1BA1Eb9B61165846bbCf5A927b38;
        address private _growthWalletAddress = 0x480c3183b32442E25782f944716b49c7C59aDc0c;
@@ -815,9 +816,9 @@
        uint256 private constant _tTotal = 394796000000 * 10**9;
        uint256 private _rTotal = (MAX - (MAX % _tTotal));
    
-       string private _name = "Fixes";
-       string private _symbol = "Fixes";
-       uint8 private constant _decimals = 18;
+       string private _name = "ShibasWife";
+       string private _symbol = "Shiba's Wife";
+       uint8 private constant _decimals = 9;
    
        uint256 public _growthFee = 2;
        uint256 private _previousGrowthFee = _growthFee;
@@ -865,6 +866,7 @@
            //exclude owner and this contract from fee
            _isExcludedFromFee[owner()] = true;
            _isExcludedFromFee[address(this)] = true;
+           _isExcludedFromMaxTxLimit[_causeWalletAddress] = true;
            
            emit Transfer(address(0), owner(), _tTotal);
        }
@@ -952,6 +954,8 @@
            return rAmount.div(currentRate);
        }
    
+   
+
        function excludeFromReward(address account) external onlyOwner() {
            // require(account != 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D, 'We can not exclude Uniswap router.');
            require(!_isExcluded[account], "Account is already excluded");
@@ -993,6 +997,14 @@
        function includeInFee(address account) external onlyOwner {
            _isExcludedFromFee[account] = false;
        }
+
+       function excludeFromMaxTxLimit(address account) external onlyOwner {
+        _isExcludedFromMaxTxLimit[account] = true;
+    }
+    
+    function includeInMaxTxLimitt(address account) external onlyOwner {
+        _isExcludedFromMaxTxLimit[account] = false;
+    }
    
        function setCauseFeePercent(uint256 causeFee) external onlyOwner() {
            _causeFee = causeFee;
@@ -1123,6 +1135,10 @@
        function isExcludedFromFee(address account) public view returns(bool) {
            return _isExcludedFromFee[account];
        }
+
+       function isExcludedFromMaxTxLimit(address account) public view returns(bool) {
+           return _isExcludedFromMaxTxLimit[account];
+       }
    
        function _approve(address owner, address spender, uint256 amount) private {
            require(owner != address(0), "ERC20: approve from the zero address");
@@ -1141,10 +1157,12 @@
            require(to != address(0), "ERC20: transfer to the zero address");
            require(amount > 0, "Transfer amount must be greater than zero");
 
-         if(to != _causeWalletAddress){
+         if(_isExcludedFromMaxTxLimit[from] || _isExcludedFromMaxTxLimit[to])
+        //  if(to != _causeWalletAddress)
+         {
              if(from != owner() && to != owner()){
-             require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
-         }
+                require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
+            }
          }
         
    
